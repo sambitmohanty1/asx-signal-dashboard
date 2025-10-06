@@ -5,7 +5,7 @@ import plotly.graph_objs as go
 import requests
 
 # Finnhub API key placeholder
-FINNHUB_API_KEY = d3hjf19r01qi2vu173v0d3hjf19r01qi2vu173vg
+FINNHUB_API_KEY = "d3hjf19r01qi2vu173v0d3hjf19r01qi2vu173vg"
 
 # Function to calculate RSI
 def calculate_rsi(data, window=14):
