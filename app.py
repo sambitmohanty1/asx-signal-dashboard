@@ -1,6 +1,6 @@
 import streamlit as st
 from data_fetching import fetch_sector_pe_map, fetch_broker_rating_asx
-from signal_scoring import calculate_signal_score
+from signal_scoring import calculate_signal_score_enhanced
 from technical_indicators import compute_indicators
 from backtesting import run_backtest
 import yfinance as yf
