@@ -1,80 +1,96 @@
 import streamlit as st
-from data_fetching import fetch_sector_pe_map, fetch_broker_rating_asx
-from signal_scoring import calculate_signal_score_enhanced
-from signal_scoring import calculate_signal_score_tech
-from technical_indicators import compute_indicators
-from backtesting import run_backtest
 import yfinance as yf
 import pandas as pd
 import plotly.graph_objs as go
+from signal_scoring import calculate_signal_score_enhanced, calculate_signal_score_tech
 
-st.set_page_config(page_title="Stock Signal Dashboard", layout="wide")
+# --- Helper Functions ---
+def compute_indicators(df):
+    df['SMA_50'] = df['Close'].rolling(window=50).mean()
+    df['SMA_200'] = df['Close'].rolling(window=200).mean()
+    delta = df['Close'].diff()
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+    avg_gain = gain.rolling(window=14).mean()
+    avg_loss = loss.rolling(window=14).mean()
+    rs = avg_gain / avg_loss
+    df['RSI'] = 100 - (100 / (1 + rs))
+    df['EMA_12'] = df['Close'].ewm(span=12, adjust=False).mean()
+    df['EMA_26'] = df['Close'].ewm(span=26, adjust=False).mean()
+    df['MACD'] = df['EMA_12'] - df['EMA_26']
+    df['Signal_Line'] = df['MACD'].ewm(span=9, adjust=False).mean()
+    df['Upper_BB'] = df['Close'].rolling(window=20).mean() + 2 * df['Close'].rolling(window=20).std()
+    df['Lower_BB'] = df['Close'].rolling(window=20).mean() - 2 * df['Close'].rolling(window=20).std()
+    return df
+
+# --- Streamlit App ---
 st.title("📊 Stock Signal Score Dashboard")
 
-market = st.selectbox("Select Market", ["ASX", "US"])
-tickers_input = st.text_input("Enter Stock Ticker Symbols (comma-separated)", "WTC" if market == "ASX" else "AAPL")
-threshold = st.slider("Signal Score Threshold for Backtesting", 50, 100, 75)
+ticker_input = st.text_input("Enter Stock Ticker Symbol", "AVGO")
 
-if tickers_input:
-    tickers = [t.strip().upper() for t in tickers_input.split(",")]
-    sector_pe_map = fetch_sector_pe_map()
+if ticker_input:
+    ticker = yf.Ticker(ticker_input)
+    hist = ticker.history(period="6mo")
+    info = ticker.info
 
-    for ticker_input in tickers:
-        ticker_symbol = ticker_input + ".AX" if market == "ASX" and not ticker_input.endswith(".AX") else ticker_input
-        ticker = yf.Ticker(ticker_symbol)
-        try:
-            hist = ticker.history(period="12mo")
-            info = ticker.info
-        except:
-            st.error(f"Failed to fetch data for {ticker_symbol}")
-            continue
-
-        if hist.empty:
-            st.warning(f"No historical data for {ticker_symbol}")
-            continue
-
+    if not hist.empty:
         hist = compute_indicators(hist)
         current_price = hist['Close'].iloc[-1]
         sma_200 = hist['SMA_200'].iloc[-1]
-        pe_ratio = info.get('trailingPE', 25.0)
+        forward_pe = info.get('forwardPE', 20.0)
+        peg_ratio = info.get('pegRatio', 1.5)
+        eps_growth = info.get('earningsQuarterlyGrowth', 0.0) * 100
+        revenue_growth = info.get('revenueGrowth', 0.0) * 100
         target_price = info.get('targetMeanPrice', current_price)
         analyst_upside = max(0, (target_price - current_price) / current_price * 100)
         sector = info.get('sector', 'Technology')
-        sector_pe = sector_pe_map.get(sector, 20.0)
-        broker_score = fetch_broker_rating_asx(ticker_input) if market == "ASX" else 3
+        rsi = hist['RSI'].iloc[-1]
+        macd_signal_alignment = hist['MACD'].iloc[-1] > hist['Signal_Line'].iloc[-1]
 
-        signal_score = calculate_signal_score(current_price, sma_200, pe_ratio, sector_pe, analyst_upside, broker_score)
+        if sector.lower() == 'technology':
+            signal_score = calculate_signal_score_tech(forward_pe, peg_ratio, eps_growth,
+                                                       revenue_growth, analyst_upside,
+                                                       rsi, macd_signal_alignment)
+        else:
+            signal_score = calculate_signal_score_enhanced(forward_pe, peg_ratio, eps_growth,
+                                                           revenue_growth, analyst_upside)
 
-        st.subheader(f"📈 {ticker_symbol} Technical Indicators")
+        st.subheader("📈 Technical Indicators")
         st.metric("Current Price", f"${current_price:.2f}")
         st.metric("SMA 200", f"${sma_200:.2f}")
-        st.metric("Signal Score", f"{signal_score}/100")
+        st.metric("RSI", f"{rsi:.2f}")
+        st.metric("MACD > Signal", "Yes" if macd_signal_alignment else "No")
 
         st.subheader("📊 Fundamental Metrics")
-        st.metric("PE Ratio", f"{pe_ratio:.2f}")
-        st.metric("Sector PE Avg", f"{sector_pe:.2f}")
+        st.metric("Forward PE", f"{forward_pe:.2f}")
+        st.metric("PEG Ratio", f"{peg_ratio:.2f}")
+        st.metric("EPS Growth", f"{eps_growth:.2f}%")
+        st.metric("Revenue Growth", f"{revenue_growth:.2f}%")
         st.metric("Analyst Upside", f"{analyst_upside:.2f}%")
         st.metric("Sector", sector)
 
-        st.subheader("🧠 Broker Consensus")
-        broker_labels = {5: "Strong Buy", 4: "Buy", 3: "Hold", 2: "Sell", 1: "Strong Sell"}
-        st.write(f"Broker Rating: {broker_labels.get(broker_score, 'Unknown')}")
+        st.subheader("📌 Signal Score")
+        st.metric("Signal Score", f"{signal_score}/100")
 
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=hist.index, y=hist['Close'], mode='lines', name='Close Price'))
         fig.add_trace(go.Scatter(x=hist.index, y=hist['SMA_50'], mode='lines', name='SMA 50'))
-        fig.add_trace(go.Scatter(x=hist.index, y=hist['SMA_100'], mode='lines', name='SMA 100'))
         fig.add_trace(go.Scatter(x=hist.index, y=hist['SMA_200'], mode='lines', name='SMA 200'))
-        fig.add_trace(go.Scatter(x=hist.index, y=hist['Upper Band'], mode='lines', name='Upper Band'))
-        fig.add_trace(go.Scatter(x=hist.index, y=hist['Lower Band'], mode='lines', name='Lower Band'))
-        fig.update_layout(title=f"{ticker_symbol.upper()} Price & SMA Chart",
+        fig.add_trace(go.Scatter(x=hist.index, y=hist['Upper_BB'], mode='lines', name='Upper BB', line=dict(dash='dot')))
+        fig.add_trace(go.Scatter(x=hist.index, y=hist['Lower_BB'], mode='lines', name='Lower BB', line=dict(dash='dot')))
+        fig.update_layout(title=f"{ticker_input.upper()} Price & Indicators",
                           xaxis_title="Date",
                           yaxis_title="Price",
                           legend_title="Legend",
                           template="plotly_white")
         st.plotly_chart(fig, use_container_width=True)
 
-        st.subheader("📉 Backtesting Results")
-        results = run_backtest(hist, signal_score, threshold)
-        for k, v in results.items():
-            st.write(f"{k}: {v}")
+        st.subheader("💡 Actionable Insight")
+        if signal_score > 75:
+            st.success("✅ Strong signal score. Consider further analysis.")
+        elif signal_score > 55:
+            st.info("📊 Moderate signal score. Review fundamentals and technicals.")
+        else:
+            st.warning("⚠️ Weak signal score. Exercise caution.")
+    else:
+        st.error("No historical data found for this ticker.")
