@@ -23,6 +23,15 @@ def compute_indicators(df):
     df['Lower_BB'] = df['Close'].rolling(window=20).mean() - 2 * df['Close'].rolling(window=20).std()
     return df
 
+
+def get_recommendation(signal_score, rsi, macd_signal_alignment, current_price, sma_200):
+    if signal_score >= 75 and rsi < 70 and macd_signal_alignment and current_price > sma_200:
+        return "🟢 BUY - Strong fundamentals and technical momentum."
+    elif signal_score <= 40 or rsi > 70 or current_price < sma_200:
+        return "🔴 SELL - Weak score or overbought/downtrend conditions."
+    else:
+        return "🟡 HOLD - Mixed signals. Monitor for confirmation."
+
 # --- Streamlit App ---
 st.title("📊 Stock Signal Score Dashboard")
 
@@ -71,6 +80,10 @@ if ticker_input:
 
         st.subheader("📌 Signal Score")
         st.metric("Signal Score", f"{signal_score}/100")
+        st.subheader("📍 Recommendation")
+        recommendation = get_recommendation(signal_score, rsi, macd_signal_alignment, current_price, sma_200)
+        st.write(recommendation)
+
 
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=hist.index, y=hist['Close'], mode='lines', name='Close Price'))
